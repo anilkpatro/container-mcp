@@ -6,11 +6,13 @@ from .bash_manager import BashManager
 from .file_manager import FileManager
 from .python_manager import PythonManager
 from .web_manager import WebManager
+from .matlab_manager import MatlabManager
 
 __all__ = [
     "KnowledgeBaseManager",
     "BashManager",
     "FileManager",
     "PythonManager",
-    "WebManager"
+    "WebManager",
+    "MatlabManager"
 ]

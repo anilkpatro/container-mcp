@@ -53,6 +53,7 @@ from cmcp.managers.bash_manager import BashManager
 from cmcp.managers.python_manager import PythonManager
 from cmcp.managers.file_manager import FileManager
 from cmcp.managers.web_manager import WebManager
+from cmcp.managers.matlab_manager import MatlabManager
 from cmcp.utils.logging import setup_logging
 from cmcp.tools import register_all_tools
 
@@ -71,12 +72,24 @@ python_manager = PythonManager.from_env(config)
 file_manager = FileManager.from_env(config)
 web_manager = WebManager.from_env(config)
 
+# Initialize MatlabManager if enabled
+matlab_manager = None
+if config.matlab_config.enabled:
+    try:
+        matlab_manager = MatlabManager.from_env(config)
+        logger.info("MatlabManager initialized successfully.")
+    except EnvironmentError as e:
+        logger.warning(f"Failed to initialize MatlabManager: {e}. MATLAB tools will be unavailable.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during MatlabManager initialization: {e}", exc_info=True)
+        matlab_manager = None # Ensure it's None if any error occurs
+
 # Set up logging
 log_file = os.path.join("logs", "cmcp.log") if os.path.exists("logs") else None
 setup_logging(config.log_level, log_file)
 
 # Register all tools
-register_all_tools(mcp, bash_manager, python_manager, file_manager, web_manager)
+register_all_tools(mcp, bash_manager, python_manager, file_manager, web_manager, matlab_manager)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -111,8 +124,29 @@ if __name__ == "__main__":
         logger.info(f"Received {signal_name}, shutting down gracefully...")
         
         # Perform cleanup for managers if needed
-        for manager in [bash_manager, python_manager, file_manager, web_manager]:
-            if hasattr(manager, 'cleanup'):
+        all_managers = [bash_manager, python_manager, file_manager, web_manager]
+        if matlab_manager:
+            all_managers.append(matlab_manager)
+
+        for manager in all_managers:
+            if hasattr(manager, 'close'): # Prefer 'close' if available
+                try:
+                    logger.info(f"Closing {manager.__class__.__name__}")
+                    if asyncio.iscoroutinefunction(manager.close):
+                        # If in a running loop, use await; if not, use asyncio.run
+                        # Signal handlers run in the main thread, may not have a running loop
+                        try:
+                            loop = asyncio.get_running_loop()
+                            # If loop is running, schedule it. This is complex from sync signal handler.
+                            # For simplicity here, and assuming close is quick or blocking is acceptable in shutdown:
+                            asyncio.run(manager.close())
+                        except RuntimeError: # No running event loop
+                            asyncio.run(manager.close())
+                    else:
+                        manager.close()
+                except Exception as e:
+                    logger.error(f"Error during close of {manager.__class__.__name__}: {e}")
+            elif hasattr(manager, 'cleanup'): # Fallback to 'cleanup'
                 try:
                     logger.info(f"Cleaning up {manager.__class__.__name__}")
                     manager.cleanup()
