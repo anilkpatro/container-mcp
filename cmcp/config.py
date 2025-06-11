@@ -1,4 +1,3 @@
-# cmcp/config.py
 # container-mcp © 2025 by Martin Bukowski is licensed under Apache 2.0
 
 """Configuration module for Container-MCP."""
@@ -111,6 +110,44 @@ class KBConfig(BaseModel):
     search_graph_neighbor_limit: int = Field(default=1000, description="Maximum number of neighbors to retrieve in graph search")
 
 
+class MatlabConfig(BaseModel):
+    """Configuration for MATLAB Manager.
+
+    Defines settings for controlling MATLAB code execution, including resource limits,
+    paths, and feature toggles. These settings can be overridden by environment
+    variables (e.g., `MATLAB_SANDBOX_DIR`, `MATLAB_ENABLED`).
+    """
+
+    sandbox_dir: str = Field(
+        default=os.path.join(BASE_PATHS["sandbox_root"], "matlab"),
+        description="Directory for MATLAB sandbox operations. Each execution gets a subdirectory here."
+    )
+    matlab_executable: str = Field(
+        default="matlab",
+        description="Path to the MATLAB executable. Can be just 'matlab' if in PATH, or a full path."
+    )
+    memory_limit: int = Field(
+        default=512,
+        description="Memory limit for MATLAB execution in MB (enforced by Firejail, approximate)."
+    )
+    timeout_default: int = Field(
+        default=60,
+        description="Default timeout for MATLAB execution in seconds."
+    )
+    timeout_max: int = Field(
+        default=300,
+        description="Maximum allowed timeout for MATLAB execution in seconds."
+    )
+    default_image_format: str = Field(
+        default="png",
+        description="Default format for saving figures (e.g., 'png', 'jpg', 'fig')."
+    )
+    enabled: bool = Field(
+        default=True,
+        description="Enable or disable the MATLAB manager and its tools."
+    )
+
+
 class MCPConfig(BaseModel):
     """MCP Server configuration."""
 
@@ -134,15 +171,14 @@ class AppConfig(BaseModel):
     filesystem_config: FileSystemConfig = Field(default_factory=FileSystemConfig)
     web_config: WebConfig = Field(default_factory=WebConfig)
     kb_config: KBConfig = Field(default_factory=KBConfig)
-    matlab_config: "MatlabConfig" # Forward declaration
+    matlab_config: MatlabConfig = Field(default_factory=MatlabConfig)
 
-    #@validator("log_level")
-    
     # Tool Enable/Disable Flags
     tools_enable_system: bool = Field(default=True, description="Enable System tools (bash, python)")
     tools_enable_file: bool = Field(default=True, description="Enable File tools")
     tools_enable_web: bool = Field(default=True, description="Enable Web tools (search, scrape, browse)")
     tools_enable_kb: bool = Field(default=True, description="Enable Knowledge Base tools")
+    tools_enable_matlab: bool = Field(default=True, description="Enable MATLAB tools")
     
     @field_validator("log_level")
     @classmethod
@@ -229,7 +265,7 @@ def load_env_config() -> Dict[str, Any]:
 
     # Matlab config
     matlab_config = MatlabConfig(
-        sandbox_dir=os.environ.get("MATLAB_SANDBOX_DIR", config["sandbox_root"]),
+        sandbox_dir=os.environ.get("MATLAB_SANDBOX_DIR", os.path.join(config["sandbox_root"], "matlab")),
         matlab_executable=os.environ.get("MATLAB_EXECUTABLE_PATH", "matlab"),
         memory_limit=int(os.environ.get("MATLAB_MEMORY_LIMIT", "512")),
         timeout_default=int(os.environ.get("MATLAB_TIMEOUT_DEFAULT", "60")),
@@ -244,65 +280,15 @@ def load_env_config() -> Dict[str, Any]:
     config["tools_enable_file"] = os.environ.get("TOOLS_ENABLE_FILE", "true").lower() == "true"
     config["tools_enable_web"] = os.environ.get("TOOLS_ENABLE_WEB", "true").lower() == "true"
     config["tools_enable_kb"] = os.environ.get("TOOLS_ENABLE_KB", "true").lower() == "true"
+    config["tools_enable_matlab"] = os.environ.get("TOOLS_ENABLE_MATLAB", "true").lower() == "true"
     
     return config
-
-# Moved MatlabConfig definition here to be before AppConfig if AppConfig needs to directly initialize it.
-# However, Pydantic handles forward references ("MatlabConfig") in type hints,
-# so the primary concern is logical grouping and ensuring load_env_config can access it.
-
-class MatlabConfig(BaseModel):
-    """Configuration for MATLAB Manager.
-
-    Defines settings for controlling MATLAB code execution, including resource limits,
-    paths, and feature toggles. These settings can be overridden by environment
-    variables (e.g., `MATLAB_SANDBOX_DIR`, `MATLAB_ENABLED`).
-    """
-
-    sandbox_dir: str = Field(
-        default=os.path.join(BASE_PATHS["sandbox_root"], "matlab"),
-        description="Directory for MATLAB sandbox operations. Each execution gets a subdirectory here."
-    )
-    matlab_executable: str = Field(
-        default="matlab",
-        description="Path to the MATLAB executable. Can be just 'matlab' if in PATH, or a full path."
-    )
-    memory_limit: int = Field(
-        default=512,
-        description="Memory limit for MATLAB execution in MB (enforced by Firejail, approximate)."
-    )
-    timeout_default: int = Field(
-        default=60,
-        description="Default timeout for MATLAB execution in seconds."
-    )
-    timeout_max: int = Field(
-        default=300,
-        description="Maximum allowed timeout for MATLAB execution in seconds."
-    )
-    default_image_format: str = Field(
-        default="png",
-        description="Default format for saving figures (e.g., 'png', 'jpg', 'fig')."
-    )
-    enabled: bool = Field(
-        default=True,
-        description="Enable or disable the MATLAB manager and its tools."
-    )
-
-# Update AppConfig to initialize matlab_config properly
-AppConfig.model_fields['matlab_config'] = Field(default_factory=MatlabConfig)
 
 
 def load_config() -> AppConfig:
     """Load configuration from environment variables and validate with Pydantic."""
     try:
         env_config = load_env_config()
-        # Ensure matlab_config is initialized within AppConfig if not present in env_config
-        if "matlab_config" not in env_config:
-            # Use the sandbox_root from the potentially overridden env_config
-            # or fall back to the default from BASE_PATHS if sandbox_root itself wasn't overridden.
-            effective_sandbox_root = env_config.get("sandbox_root", BASE_PATHS["sandbox_root"])
-            env_config["matlab_config"] = MatlabConfig(sandbox_dir=os.path.join(effective_sandbox_root, "matlab"))
-
         config = AppConfig(**env_config)
         
         # Set logging level

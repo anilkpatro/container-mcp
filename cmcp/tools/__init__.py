@@ -16,12 +16,17 @@ from .matlab import create_matlab_tools
 from cmcp.managers.matlab_manager import MatlabManager # For type hinting
 from typing import Optional # For type hinting
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
 def register_all_tools(
     mcp,
+    config,
     bash_manager,
     python_manager,
     file_manager,
     web_manager,
+    kb_manager,
     matlab_manager: Optional[MatlabManager] = None
 ):
     """Register all tools with the MCP instance.
