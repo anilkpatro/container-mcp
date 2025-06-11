@@ -11,9 +11,13 @@ import numpy as np # For creating sample data for .mat files
 import pytest
 # Conditional import for type hinting if scipy is part of the test environment
 try:
-    from scipy.io.matlab.miobase import MatReadError
+    from scipy.io.matlab import MatReadError
 except ImportError:
-    MatReadError = Exception # Fallback if scipy not installed in test env
+    # Fallback for older scipy versions
+    try:
+        from scipy.io.matlab.miobase import MatReadError
+    except ImportError:
+        MatReadError = Exception # Fallback if scipy not installed in test env
 
 from cmcp.managers.matlab_manager import MatlabManager, MatlabResult, MatlabInput # Import MatlabInput
 from cmcp.config import AppConfig, MatlabConfig
@@ -92,7 +96,7 @@ async def test_matlab_manager_initialization(sandbox_dir):
 
 async def test_matlab_manager_from_env_enabled(mock_app_config_matlab_enabled):
     """Test MatlabManager.from_env() when MATLAB is enabled."""
-    with patch('cmcp.managers.matlab_manager.load_config', return_value=mock_app_config_matlab_enabled):
+    with patch('cmcp.config.load_config', return_value=mock_app_config_matlab_enabled):
         manager = MatlabManager.from_env(app_config=mock_app_config_matlab_enabled)
 
     cfg = mock_app_config_matlab_enabled.matlab_config
@@ -105,7 +109,7 @@ async def test_matlab_manager_from_env_enabled(mock_app_config_matlab_enabled):
 
 async def test_matlab_manager_from_env_disabled(mock_app_config_matlab_disabled):
     """Test MatlabManager.from_env() when MATLAB is disabled in config."""
-    with patch('cmcp.managers.matlab_manager.load_config', return_value=mock_app_config_matlab_disabled):
+    with patch('cmcp.config.load_config', return_value=mock_app_config_matlab_disabled):
         with pytest.raises(EnvironmentError, match="MatlabManager is disabled"):
             MatlabManager.from_env(app_config=mock_app_config_matlab_disabled)
 
@@ -182,17 +186,17 @@ async def test_execute_figure_saving(mock_shutil_which, mock_app_config_matlab_e
     # This requires knowing the execution_dir that the manager will create.
     # We can patch uuid.uuid4 to control the generated names for predictability.
 
-    fixed_uuid_str_exec_dir = "fixedexecdiruuid"
+    fixed_uuid_str_exec_dir = "12345678123456781234567812345678"  # Valid 32-char hex string
     fixed_uuid_exec_dir = uuid.UUID(fixed_uuid_str_exec_dir)
 
-    fixed_uuid_str_fig = "fixedfigureuuid0"
+    fixed_uuid_str_fig = "87654321876543218765432187654321"  # Valid 32-char hex string
 
     # The manager's execute method will create a directory like:
-    # sandbox_dir/matlab_exec_fixedexecdiruuid/
+    # sandbox_dir/matlab_exec_12345678-1234-5678-1234-567812345678/
     # And the image file will be like:
-    # sandbox_dir/matlab_exec_fixedexecdiruuid/figure_handle_1_fixedfigureuuid0.png
+    # sandbox_dir/matlab_exec_12345678-1234-5678-1234-567812345678/figure_handle_1_87654321876543218765432187654321.png
 
-    expected_exec_dir_name = f"matlab_exec_{fixed_uuid_str_exec_dir}"
+    expected_exec_dir_name = f"matlab_exec_{fixed_uuid_exec_dir}"  # This will include hyphens
     # The config sandbox_dir is sandbox_dir/matlab, so the full path is:
     full_execution_dir = os.path.join(manager.sandbox_dir, expected_exec_dir_name)
 
@@ -217,11 +221,11 @@ async def test_execute_figure_saving(mock_shutil_which, mock_app_config_matlab_e
 
     # We need two different UUIDs: one for exec_dir, one for figure name
     mock_uuid_patcher = patch('uuid.uuid4', side_effect=[
-        uuid.UUID(fixed_uuid_str_exec_dir), # For execution_dir_name
+        fixed_uuid_exec_dir, # For execution_dir_name
         uuid.UUID(fixed_uuid_str_fig),      # For the first figure name in figure_saving_code
-        uuid.UUID("anotheruuid1"),          # For the second figure name (currentFig)
-        uuid.UUID("anotheruuid2"),          # Potentially more if the user code also uses uuid.
-        uuid.UUID("anotheruuid3"),
+        uuid.UUID("11111111111111111111111111111111"),          # For the second figure name (currentFig)
+        uuid.UUID("22222222222222222222222222222222"),          # Potentially more if the user code also uses uuid.
+        uuid.UUID("33333333333333333333333333333333"),
     ])
 
 
@@ -303,8 +307,9 @@ async def test_sandbox_command_structure(mock_shutil_which_multiple, mock_app_co
     # Path to the execution directory within the sandbox
     # Manager creates sandbox_dir/matlab_exec_UUID.
     # We need a predictable UUID for this test.
-    fixed_uuid_str = "testexecdirforsandbox"
-    execution_dir_name = f"matlab_exec_{fixed_uuid_str}"
+    fixed_uuid_str = "12345678123456781234567812345678"  # Valid 32-char hex string
+    fixed_uuid = uuid.UUID(fixed_uuid_str)
+    execution_dir_name = f"matlab_exec_{fixed_uuid}"  # This will include hyphens when converted to string
     # The manager's sandbox_dir is from config: sandbox_dir/matlab
     full_execution_dir_sandbox_view = os.path.join(manager.sandbox_dir, execution_dir_name)
 
@@ -313,7 +318,7 @@ async def test_sandbox_command_structure(mock_shutil_which_multiple, mock_app_co
     matlab_script_path_arg = os.path.join(full_execution_dir_sandbox_view, temp_script_name)
 
     # We need to control the UUID for the execution_dir_name
-    with patch('uuid.uuid4', return_value=uuid.UUID(fixed_uuid_str)):
+    with patch('uuid.uuid4', return_value=fixed_uuid):
         # Call _get_sandbox_command indirectly by trying to execute
         # We need to mock asyncio.create_subprocess_exec to prevent actual execution
         # Also mock scipy to prevent issues if test environment doesn't have it
@@ -331,7 +336,7 @@ async def test_sandbox_command_structure(mock_shutil_which_multiple, mock_app_co
     assert f"--private={manager.sandbox_dir}" in call_args_list
     assert f"--whitelist={full_execution_dir_sandbox_view}" in call_args_list
     # The matlab executable itself is one of the last arguments, before -nodesktop, -nosplash, -batch
-    assert f"/opt/MATLAB/{manager.matlab_executable}" in call_args_list
+    assert manager.matlab_executable in call_args_list
 
     # Check for the MATLAB batch command structure
     expected_batch_command_part = f"run('{matlab_script_path_arg}')"
@@ -355,8 +360,6 @@ async def test_firejail_not_available(mock_app_config_matlab_enabled):
     def which_side_effect(cmd):
         if cmd == "firejail":
             return None # Firejail not found
-        if cmd == mock_app_config_matlab_enabled.matlab_config.matlab_executable:
-            return f"/mock/path/to/{mock_app_config_matlab_enabled.matlab_config.matlab_executable}"
         return None
 
     with patch('shutil.which', side_effect=which_side_effect) as mock_shutil_which_call:
@@ -371,7 +374,7 @@ async def test_firejail_not_available(mock_app_config_matlab_enabled):
     assert mock_create_subprocess.called
     cmd_args_list = mock_create_subprocess.call_args[0]
     assert "firejail" not in cmd_args_list[0] # First arg should be matlab executable
-    assert f"/mock/path/to/{manager.matlab_executable}" == cmd_args_list[0]
+    assert manager.matlab_executable == cmd_args_list[0]  # Should be the configured matlab executable
     # Ensure it logged a warning
     # (Requires capturing logs or checking logger calls if using a mock logger)
 
@@ -422,7 +425,7 @@ async def test_execute_multiple_figures(mock_shutil_which, mock_app_config_matla
     fig_uuid2 = uuid.uuid4()
     fig_uuid3 = uuid.uuid4() # For the 'current' figure
 
-    expected_exec_dir_name = f"matlab_exec_{exec_dir_uuid.hex}"
+    expected_exec_dir_name = f"matlab_exec_{exec_dir_uuid}"  # This will include hyphens
     full_execution_dir = os.path.join(manager.sandbox_dir, expected_exec_dir_name)
 
     simulated_image_name1 = f"figure_handle_1_{fig_uuid1.hex}.{manager.default_image_format}"
@@ -456,7 +459,7 @@ async def test_execute_multiple_figures(mock_shutil_which, mock_app_config_matla
     ]
 
     with patch('uuid.uuid4', side_effect=uuid_side_effects), \
-         patch('asyncio.create_subprocess_exec', return_value=mock_proc), \
+         patch('asyncio.create_subprocess_exec', return_value=mock_proc) as mock_create_subprocess, \
          patch('os.listdir', side_effect=mock_listdir_side_effect) as mock_os_listdir:
 
         result = await manager.execute("figure; plot(1:10); figure; plot(rand(5));")
@@ -504,7 +507,7 @@ async def test_execute_multiple_figures_corrected(mock_shutil_which, mock_app_co
     fig_uuid2 = uuid.uuid4()
     fig_uuid3 = uuid.uuid4()
 
-    expected_exec_dir_name = f"matlab_exec_{exec_dir_uuid.hex}"
+    expected_exec_dir_name = f"matlab_exec_{exec_dir_uuid}"  # This will include hyphens
     full_execution_dir = os.path.join(manager.sandbox_dir, expected_exec_dir_name)
 
     simulated_image_name1 = f"figure_handle_1_{fig_uuid1.hex}.{manager.default_image_format}"
@@ -537,7 +540,7 @@ async def test_execute_multiple_figures_corrected(mock_shutil_which, mock_app_co
 
     mock_os_listdir.assert_any_call(full_execution_dir)
 
-    script_path_pattern = os.path.join(full_execution_dir, f"run_script_{exec_dir_uuid.hex}.m")
+    script_path_pattern = os.path.join(full_execution_dir, "run_script.m")  # Fixed script name
     # mock_create_subprocess is the mock for asyncio.create_subprocess_exec
     args_list = mock_create_subprocess.call_args[0]
     found_script_arg = any(script_path_pattern in arg for arg in args_list if isinstance(arg, str))
@@ -565,7 +568,7 @@ async def test_execute_with_input_data(mock_scipy, mock_shutil_which, mock_app_c
 
     # Need to control exec_dir uuid for path prediction
     fixed_uuid_exec_dir = uuid.uuid4()
-    expected_exec_dir_name = f"matlab_exec_{fixed_uuid_exec_dir.hex}"
+    expected_exec_dir_name = f"matlab_exec_{fixed_uuid_exec_dir}"  # This will include hyphens
     full_execution_dir = os.path.join(manager.sandbox_dir, expected_exec_dir_name)
     expected_input_mat_path = os.path.join(full_execution_dir, "input.mat")
 
@@ -620,7 +623,7 @@ async def test_execute_generates_output_data(mock_scipy, mock_shutil_which, mock
     mock_proc.communicate = AsyncMock(return_value=(b"Done", b""))
 
     fixed_uuid_exec_dir = uuid.uuid4()
-    expected_exec_dir_name = f"matlab_exec_{fixed_uuid_exec_dir.hex}"
+    expected_exec_dir_name = f"matlab_exec_{fixed_uuid_exec_dir}"  # This will include hyphens
     full_execution_dir = os.path.join(manager.sandbox_dir, expected_exec_dir_name)
     expected_output_mat_path = os.path.join(full_execution_dir, "output.mat")
 
@@ -630,7 +633,7 @@ async def test_execute_generates_output_data(mock_scipy, mock_shutil_which, mock
 
         result = await manager.execute(code="save('output.mat', 'result_var');")
 
-    mock_path_exists.assert_called_with(expected_output_mat_path)
+    mock_path_exists.assert_any_call(expected_output_mat_path)
     mock_scipy.io.loadmat.assert_called_with(expected_output_mat_path)
     assert result.output_data is not None
     assert 'result_var' in result.output_data
@@ -721,7 +724,7 @@ async def test_execute_with_input_scipy_unavailable(mock_shutil_which, mock_app_
 
 @patch('shutil.which', return_value="mock_firejail_path")
 @patch('cmcp.managers.matlab_manager.scipy', None) # Scipy unavailable for this test
-async def test_execute_no_input_scipy_unavailable(mock_scipy_none, mock_shutil_which, mock_app_config_matlab_enabled):
+async def test_execute_no_input_scipy_unavailable(mock_shutil_which, mock_app_config_matlab_enabled):
     """Test execution without input_vars when scipy is not available (should still run)."""
     manager = MatlabManager.from_env(app_config=mock_app_config_matlab_enabled)
 

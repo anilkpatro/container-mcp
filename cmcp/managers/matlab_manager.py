@@ -212,6 +212,10 @@ class MatlabManager:
         # The user's code should save output variables to 'output.mat' if they want them back.
         # Example: save('output.mat', 'var1', 'var2');
 
+        # Generate unique identifiers for figure filenames
+        figure_uuid = uuid.uuid4().hex
+        current_figure_uuid = uuid.uuid4().hex
+
         figure_saving_code = f"""
         % --- Auto-generated figure saving code ---
         disp('Attempting to save figures...');
@@ -219,7 +223,7 @@ class MatlabManager:
         for i = 1:length(figHandles)
             fig = figHandles(i);
             if isvalid(fig)
-                image_filename = fullfile('{execution_dir}', ['figure_handle_' num2str(fig.Number) '_{uuid.uuid4().hex}.{self.default_image_format}']);
+                image_filename = fullfile('{execution_dir}', ['figure_handle_' num2str(fig.Number) '_{figure_uuid}.{self.default_image_format}']);
                 try
                     saveas(fig, image_filename);
                     disp(['Saved figure: ' image_filename]);
@@ -232,7 +236,7 @@ class MatlabManager:
         try
             currentFig = gcf;
             if ~isempty(currentFig.Name) || ~isempty(currentFig.Children) % Check if it's not an empty default figure
-                image_filename_current = fullfile('{execution_dir}', ['figure_current_{uuid.uuid4().hex}.{self.default_image_format}']);
+                image_filename_current = fullfile('{execution_dir}', ['figure_current_{current_figure_uuid}.{self.default_image_format}']);
                 saveas(currentFig, image_filename_current);
                 disp(['Saved current figure: ' image_filename_current]);
             end
@@ -354,7 +358,8 @@ class MatlabManager:
         """
         base_command = [self.matlab_executable, "-nodesktop", "-nosplash"] + matlab_args
 
-        if not self._is_firejail_available():
+        firejail_path = self._get_firejail_path()
+        if not firejail_path:
             logger.warning("Firejail is not available. MATLAB will run without sandboxing. THIS IS INSECURE.")
             return base_command
 
@@ -365,7 +370,7 @@ class MatlabManager:
         # --rlimit-as: Sets memory limit (approximate for MATLAB).
         # Note: MATLAB's actual memory usage can be complex. This limit is for the process tree.
         firejail_cmd = [
-            "firejail",
+            firejail_path,  # Use the actual path to firejail
             "--quiet",
             f"--private={self.sandbox_dir}", # Mount the main sandbox dir as private
             f"--whitelist={execution_path}", # Whitelist the specific execution dir
@@ -397,9 +402,13 @@ class MatlabManager:
                os.getenv('DOTNET_RUNNING_IN_CONTAINER') == 'true' or \
                (os.path.exists('/proc/1/cgroup') and 'docker' in open('/proc/1/cgroup', 'rt').read())
 
+    def _get_firejail_path(self) -> Optional[str]:
+        """Get the path to Firejail if it's installed and available in PATH."""
+        return shutil.which("firejail")
+    
     def _is_firejail_available(self) -> bool:
         """Check if Firejail is installed and available in PATH."""
-        return shutil.which("firejail") is not None
+        return self._get_firejail_path() is not None
 
     async def close(self):
         """Clean up any persistent resources (if any)."""

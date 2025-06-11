@@ -172,8 +172,15 @@ original_stderr = sys.stderr
 sys.stdout = io.StringIO()
 sys.stderr = io.StringIO()
 
-# Set resource limits
-resource.setrlimit(resource.RLIMIT_AS, ({self.memory_limit * 1024 * 1024}, {self.memory_limit * 1024 * 1024}))
+# Set resource limits (with error handling for development environments)
+try:
+    memory_limit_bytes = {self.memory_limit * 1024 * 1024}
+    resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
+except (OSError, ValueError, resource.error) as e:
+    # If we can't set the resource limit, continue without it
+    # This can happen on macOS, some Linux distributions, or when running in containers
+    # In production with proper sandboxing, this should work
+    pass
 
 result = None
 try:

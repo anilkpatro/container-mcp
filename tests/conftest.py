@@ -75,8 +75,16 @@ def test_config() -> AppConfig:
                 "reranker_model": "mixedbread-ai/mxbai-rerank-base-v1", # Keep model name
                 "search_relation_predicates": ["references", "cites"], # Example list
                 "search_graph_neighbor_limit": 500 # Example limit
-            }
+            },
             # --- End KB Config ---
+            # --- Matlab Config ---
+            "matlab_config": {
+                "enabled": True,
+                "timeout_default": 30,
+                "timeout_max": 60,
+                "max_output_length": 10000
+            },
+            # --- End Matlab Config ---            
         }
 
         # Create config object
