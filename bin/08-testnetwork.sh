@@ -158,7 +158,19 @@ echo "Test Results:"
 echo "============="
 echo "Passed: $test_passed/$test_total"
 
-python scripts/list_tools.py
+# Check if we're in a virtual environment, and activate if not
+if [ -z "$VIRTUAL_ENV" ]; then
+    if [ -d ".venv" ]; then
+        echo "Activating virtual environment..."
+        source .venv/bin/activate
+    else
+        echo "No virtual environment found. Creating one..."
+        python3 -m venv .venv
+        source .venv/bin/activate
+        uv pip install -e ".[dev]"
+    fi
+fi
+python3 scripts/list_tools.py
 
 if [ $test_passed -eq $test_total ]; then
     echo -e "${GREEN}✓ ALL TESTS PASSED${NC}"

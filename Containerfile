@@ -50,7 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     nmap \
     traceroute \
-    mtr \
+    mtr-tiny \
     openssh-client \
     socat \
     netcat-openbsd \
@@ -72,7 +72,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bzip2 \
     xz-utils \
     p7zip-full \
-    rar \
     unrar \
     zstd \
     lzip \
@@ -115,7 +114,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlmap \
     dirb \
     gobuster \
-    aircrack-ng \
     hydra \
     hashcat \
     john \

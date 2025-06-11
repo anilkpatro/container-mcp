@@ -23,7 +23,7 @@ if [ -z "$VIRTUAL_ENV" ]; then
         source .venv/bin/activate
     else
         echo "No virtual environment found. Creating one..."
-        python3.12 -m venv .venv
+        python3 -m venv .venv
         source .venv/bin/activate
         uv pip install -e ".[dev]"
     fi
