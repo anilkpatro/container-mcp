@@ -7,7 +7,7 @@ import os
 import logging
 import tempfile
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Detect environment
 def is_in_container() -> bool:
     """Check if we're running inside a container."""
-    return os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv')
+    return os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv') or os.environ.get("CONTAINER") == "true"
 
 
 # Determine base paths
@@ -93,6 +93,7 @@ class WebConfig(BaseModel):
 
     timeout_default: int = Field(default=30)
     allowed_domains: Optional[List[str]] = Field(default=None)
+    brave_search_api_key: Optional[str] = Field(default=None, description="API Key for Brave Search API")
 
 
 class KBConfig(BaseModel):
@@ -101,6 +102,13 @@ class KBConfig(BaseModel):
     storage_path: str = Field(default=os.path.join(BASE_PATHS["base_dir"], "kb"))
     timeout_default: int = Field(default=30)
     timeout_max: int = Field(default=120)
+    # Search configuration
+    search_enabled: bool = Field(default=True, description="Enable search functionality")
+    sparse_index_path: Optional[str] = Field(default=None, description="Path to sparse search index")
+    graph_index_path: Optional[str] = Field(default=None, description="Path to graph search index")
+    reranker_model: Optional[str] = Field(default="mixedbread-ai/mxbai-rerank-base-v1", description="Reranker model name")
+    search_relation_predicates: List[str] = Field(default_factory=lambda: ["references"], description="Relation predicates to follow in graph search")
+    search_graph_neighbor_limit: int = Field(default=1000, description="Maximum number of neighbors to retrieve in graph search")
 
 
 class MCPConfig(BaseModel):
@@ -128,7 +136,16 @@ class AppConfig(BaseModel):
     kb_config: KBConfig = Field(default_factory=KBConfig)
     matlab_config: "MatlabConfig" # Forward declaration
 
-    @validator("log_level")
+    #@validator("log_level")
+    
+    # Tool Enable/Disable Flags
+    tools_enable_system: bool = Field(default=True, description="Enable System tools (bash, python)")
+    tools_enable_file: bool = Field(default=True, description="Enable File tools")
+    tools_enable_web: bool = Field(default=True, description="Enable Web tools (search, scrape, browse)")
+    tools_enable_kb: bool = Field(default=True, description="Enable Knowledge Base tools")
+    
+    @field_validator("log_level")
+    @classmethod
     def validate_log_level(cls, v):
         """Validate log level."""
         valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -186,9 +203,11 @@ def load_env_config() -> Dict[str, Any]:
     
     # Web config
     web_domains = os.environ.get("WEB_ALLOWED_DOMAINS", "*")
+    brave_key = os.environ.get("BRAVE_SEARCH_API_KEY")  # Get the key from env
     web_config = WebConfig(
         timeout_default=int(os.environ.get("WEB_TIMEOUT_DEFAULT", "30")),
         allowed_domains=None if web_domains == "*" else web_domains.split(","),
+        brave_search_api_key=brave_key  # Pass the retrieved key
     )
     config["web_config"] = web_config
     
@@ -198,6 +217,13 @@ def load_env_config() -> Dict[str, Any]:
         storage_path=kb_storage_path,
         timeout_default=int(os.environ.get("KB_TIMEOUT_DEFAULT", "30")),
         timeout_max=int(os.environ.get("KB_TIMEOUT_MAX", "120")),
+        # Search configuration
+        search_enabled=os.environ.get("CMCP_KB_SEARCH_ENABLED", "true").lower() == "true",
+        sparse_index_path=os.environ.get("CMCP_KB_SPARSE_INDEX_PATH", os.path.join(kb_storage_path, "search/sparse_idx")),
+        graph_index_path=os.environ.get("CMCP_KB_GRAPH_INDEX_PATH", os.path.join(kb_storage_path, "search/graph_idx")),
+        reranker_model=os.environ.get("CMCP_KB_RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v1"),
+        search_relation_predicates=os.environ.get("CMCP_KB_SEARCH_RELATION_PREDICATES", "references").split(",") if os.environ.get("CMCP_KB_SEARCH_RELATION_PREDICATES") else ["references"],
+        search_graph_neighbor_limit=int(os.environ.get("CMCP_KB_SEARCH_GRAPH_NEIGHBOR_LIMIT", "1000"))
     )
     config["kb_config"] = kb_config
 
@@ -212,6 +238,12 @@ def load_env_config() -> Dict[str, Any]:
         enabled=os.environ.get("MATLAB_ENABLED", "true").lower() == "true",
     )
     config["matlab_config"] = matlab_config
+    
+    # Tool Enable/Disable Flags - default to true if not set
+    config["tools_enable_system"] = os.environ.get("TOOLS_ENABLE_SYSTEM", "true").lower() == "true"
+    config["tools_enable_file"] = os.environ.get("TOOLS_ENABLE_FILE", "true").lower() == "true"
+    config["tools_enable_web"] = os.environ.get("TOOLS_ENABLE_WEB", "true").lower() == "true"
+    config["tools_enable_kb"] = os.environ.get("TOOLS_ENABLE_KB", "true").lower() == "true"
     
     return config
 

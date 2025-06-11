@@ -47,6 +47,9 @@ if not (os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv')):
     os.makedirs(os.environ["TEMP_DIR"], exist_ok=True)
 
 from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from cmcp.config import load_config
 from cmcp.managers.bash_manager import BashManager
@@ -54,14 +57,39 @@ from cmcp.managers.python_manager import PythonManager
 from cmcp.managers.file_manager import FileManager
 from cmcp.managers.web_manager import WebManager
 from cmcp.managers.matlab_manager import MatlabManager
+from cmcp.managers.knowledge_base_manager import KnowledgeBaseManager
 from cmcp.utils.logging import setup_logging
 from cmcp.tools import register_all_tools
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Custom FastMCP class with health endpoint
+class ContainerMCP(FastMCP):
+    """Extended FastMCP with health endpoint."""
+    
+    def sse_app(self, mount_path: str = "") -> Starlette:
+        """Create SSE app with health endpoint."""
+        # Get the original SSE app
+        app = super().sse_app(mount_path)
+        
+        # Add health endpoint
+        async def health_endpoint(request):
+            """Simple health check endpoint."""
+            return JSONResponse({
+                "status": "healthy",
+                "service": "Container-MCP",
+                "transport": "sse"
+            })
+        
+        # Add the health route to existing routes
+        health_route = Route("/health", health_endpoint, methods=["GET"])
+        app.router.routes.append(health_route)
+        
+        return app
+
 # Initialize the MCP server
-mcp = FastMCP("Container-MCP")
+mcp = ContainerMCP("Container-MCP")
 
 # Load configuration
 config = load_config()
@@ -71,6 +99,7 @@ bash_manager = BashManager.from_env(config)
 python_manager = PythonManager.from_env(config)
 file_manager = FileManager.from_env(config)
 web_manager = WebManager.from_env(config)
+kb_manager = KnowledgeBaseManager.from_env(config)
 
 # Initialize MatlabManager if enabled
 matlab_manager = None
@@ -88,8 +117,69 @@ if config.matlab_config.enabled:
 log_file = os.path.join("logs", "cmcp.log") if os.path.exists("logs") else None
 setup_logging(config.log_level, log_file)
 
-# Register all tools
-register_all_tools(mcp, bash_manager, python_manager, file_manager, web_manager, matlab_manager)
+# Initialize the knowledge base manager
+async def initialize_managers():
+    # Only initialize if KB tools are enabled
+    if config.tools_enable_kb:
+        await kb_manager.initialize()
+
+# Run initialization in event loop
+try:
+    # Check if we're already running in an event loop
+    asyncio.get_running_loop()
+    # If we get here, we're in an event loop, so create a task
+    asyncio.create_task(initialize_managers())
+except RuntimeError:
+    # No running event loop, so run the initialization
+    asyncio.run(initialize_managers())
+
+# Add a health check tool
+@mcp.tool()
+async def health_check() -> dict:
+    """Get server health status and system information."""
+    import datetime
+    import platform
+    import psutil
+    
+    # Get system information
+    system_info = {
+        "status": "healthy",
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "server": {
+            "name": "Container-MCP",
+            "host": config.mcp_host,
+            "port": config.mcp_port,
+            "platform": platform.platform(),
+            "python_version": platform.python_version(),
+        },
+        "system": {
+            "cpu_percent": psutil.cpu_percent(interval=1),
+            "memory_percent": psutil.virtual_memory().percent,
+            "disk_percent": psutil.disk_usage('/').percent if hasattr(psutil, 'disk_usage') else None,
+        },
+        "managers": {
+            "bash": "enabled" if config.tools_enable_system else "disabled",
+            "python": "enabled" if config.tools_enable_system else "disabled", 
+            "file": "enabled" if config.tools_enable_file else "disabled",
+            "web": "enabled" if config.tools_enable_web else "disabled",
+            "kb": "enabled" if config.tools_enable_kb else "disabled",
+            "matlab": "enabled" if config.tools_enable_matlab else "disabled",
+        }
+    }
+    
+    return system_info
+
+# Register tools based on configuration flags
+register_all_tools(
+    mcp,
+    config,  # Pass the config object
+    bash_manager,
+    python_manager,
+    file_manager,
+    web_manager,
+    kb_manager,
+    matlab_manager
+)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -99,13 +189,11 @@ if __name__ == "__main__":
     
     # Make sure environment variables are set (from .env file)
     # For containers, always use port 8000 internally, but bind to specified host
+    port = int(os.environ.get("MCP_PORT", config.mcp_port))
+    host = os.environ.get("MCP_HOST", config.mcp_host)
     if os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv'):
-        port = 8000  # Fixed internal port 
-        host = os.environ.get("MCP_HOST", "0.0.0.0")  # Default to all interfaces in container
-    else:
-        # For local development, use the configured port
-        port = int(os.environ.get("MCP_PORT", config.mcp_port))
-        host = os.environ.get("MCP_HOST", config.mcp_host)
+        port = 8000
+        host = os.environ.get("MCP_HOST", "0.0.0.0")
     
     # Allow command-line arguments to override environment settings
     for i, arg in enumerate(sys.argv):
@@ -129,24 +217,7 @@ if __name__ == "__main__":
             all_managers.append(matlab_manager)
 
         for manager in all_managers:
-            if hasattr(manager, 'close'): # Prefer 'close' if available
-                try:
-                    logger.info(f"Closing {manager.__class__.__name__}")
-                    if asyncio.iscoroutinefunction(manager.close):
-                        # If in a running loop, use await; if not, use asyncio.run
-                        # Signal handlers run in the main thread, may not have a running loop
-                        try:
-                            loop = asyncio.get_running_loop()
-                            # If loop is running, schedule it. This is complex from sync signal handler.
-                            # For simplicity here, and assuming close is quick or blocking is acceptable in shutdown:
-                            asyncio.run(manager.close())
-                        except RuntimeError: # No running event loop
-                            asyncio.run(manager.close())
-                    else:
-                        manager.close()
-                except Exception as e:
-                    logger.error(f"Error during close of {manager.__class__.__name__}: {e}")
-            elif hasattr(manager, 'cleanup'): # Fallback to 'cleanup'
+            if hasattr(manager, 'cleanup'):
                 try:
                     logger.info(f"Cleaning up {manager.__class__.__name__}")
                     manager.cleanup()
