@@ -11,6 +11,7 @@ from pathlib import Path
 import logging
 import asyncio
 from typing import Dict, Any, Optional, List
+from starlette.middleware.cors import CORSMiddleware
 
 # Load environment file directly
 def load_env_file():
@@ -52,11 +53,14 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from cmcp.config import load_config
-from cmcp.managers.bash_manager import BashManager
-from cmcp.managers.python_manager import PythonManager
-from cmcp.managers.file_manager import FileManager
-from cmcp.managers.web_manager import WebManager
-from cmcp.managers.knowledge_base_manager import KnowledgeBaseManager
+from cmcp.managers import (
+    BashManager,
+    PythonManager,
+    FileManager,
+    WebManager,
+    KnowledgeBaseManager,
+    ListManager
+)
 from cmcp.utils.logging import setup_logging
 from cmcp.tools import register_all_tools
 
@@ -68,9 +72,18 @@ class ContainerMCP(FastMCP):
     """Extended FastMCP with health endpoint."""
     
     def sse_app(self, mount_path: str = "") -> Starlette:
-        """Create SSE app with health endpoint."""
+        """Create SSE app with health endpoint and CORS support."""
         # Get the original SSE app
         app = super().sse_app(mount_path)
+        
+        # Add CORS middleware
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # Allow all origins - you can restrict this as needed
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
         
         # Add health endpoint
         async def health_endpoint(request):
@@ -99,6 +112,7 @@ python_manager = PythonManager.from_env(config)
 file_manager = FileManager.from_env(config)
 web_manager = WebManager.from_env(config)
 kb_manager = KnowledgeBaseManager.from_env(config)
+list_manager = ListManager.from_env(config)
 
 # Set up logging
 log_file = os.path.join("logs", "cmcp.log") if os.path.exists("logs") else None
@@ -163,7 +177,8 @@ register_all_tools(
     python_manager,
     file_manager,
     web_manager,
-    kb_manager
+    kb_manager,
+    list_manager
 )
 
 if __name__ == "__main__":

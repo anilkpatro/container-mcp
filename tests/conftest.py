@@ -75,8 +75,13 @@ def test_config() -> AppConfig:
                 "reranker_model": "mixedbread-ai/mxbai-rerank-base-v1", # Keep model name
                 "search_relation_predicates": ["references", "cites"], # Example list
                 "search_graph_neighbor_limit": 500 # Example limit
-            }
+            },
             # --- End KB Config ---
+            # --- Add List Config ---
+            "list_config": {
+                "storage_path": os.path.join(temp_base_dir, "lists")
+            }
+            # --- End List Config ---
         }
 
         # Create config object
@@ -158,10 +163,25 @@ def web_manager(test_config):
 
 
 @pytest.fixture
+def list_manager(test_config):
+    """Create a ListManager instance for tests."""
+    # Import here to avoid circular imports
+    from cmcp.managers.list_manager import ListManager
+    
+    # Create storage directory
+    os.makedirs(test_config.list_config.storage_path, exist_ok=True)
+    
+    # Create manager
+    manager = ListManager(storage_path=test_config.list_config.storage_path)
+    
+    yield manager
+
+
+@pytest.fixture
 async def kb_manager(test_config):
     """Create a KnowledgeBaseManager instance for tests."""
     # Import here to avoid circular imports
-    from cmcp.managers.knowledge_base_manager import KnowledgeBaseManager
+    from cmcp.managers import KnowledgeBaseManager
     
     # Create manager
     manager = KnowledgeBaseManager.from_env(test_config)
